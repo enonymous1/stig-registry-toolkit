@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.1.0 — 2026-10-28
+
+Folded in the standalone STIG CSV splitter (`stigs`, 2026-07-19):
+`stig-registry-toolkit split` splits a concatenated DISA STIG export
+into one CSV per STIG title. The bundled Chrome/Adobe check data was
+derived from such an export (the export's 42 Chrome rows match the
+42 bundled Chrome checks), so the prep step now lives with the tool
+that consumes it. The 46 MB export itself is not shipped; bring your
+own current DISA export.
+
+- New `split` subcommand (no registry access): `split all_stigs.csv`
+  writes `<stem>_split/<STIG>.csv` files, `--output-dir` overrides,
+  `--column` picks the split column (default `STIG`), `--dry-run`
+  previews counts without writing, and existing outputs block the
+  run unless `--overwrite` is given.
+- Fixes the original script's bugs: colliding sanitized titles get
+  distinct filenames (`A/B` vs `A_B`) instead of overwriting each
+  other, blank titles are skipped and counted instead of writing
+  `.csv`, outputs are streamed through a bounded writer cache
+  instead of holding all 402 files open, malformed rows fail
+  loudly, and Windows reserved stems (`CON`, `PRN`, ...) are
+  prefixed. 12 new tests; 60 total.
+
 ## 2.0.0 — 2026-10-27
 
 Renamed to stig-registry-toolkit before publication; the

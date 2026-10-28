@@ -1,4 +1,4 @@
-"""Command-line interface: check, fix, backup, restore, report, gui.
+"""Command-line interface: check, fix, backup, restore, report, gui, split.
 
 Safety rules, enforced here and in the GUI:
 
@@ -29,6 +29,7 @@ from .backup import (
 from .checks import APPS, load_checks, resolve_app
 from .engine import CheckResult, fix_all, verify_all
 from .registry import RegistryBackend, RegistryUnavailableError, create_backend
+from .split import SplitError, split_stig_csv
 
 DEFAULT_BACKUP_DIR = Path("stig-registry-toolkit-backups")
 
@@ -284,6 +285,38 @@ def _cmd_report(args: argparse.Namespace, backend: RegistryBackend) -> int:
     return exit_code
 
 
+def _cmd_split(args: argparse.Namespace) -> int:
+    """Split a concatenated DISA STIG CSV. No registry access needed."""
+    input_file: Path = args.input
+    output_dir: Path = args.output_dir
+    if output_dir is None:
+        output_dir = input_file.parent / f"{input_file.stem}_split"
+    try:
+        summary = split_stig_csv(
+            input_file,
+            output_dir,
+            column=args.column,
+            overwrite=args.overwrite,
+            dry_run=args.dry_run,
+        )
+    except SplitError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    verb = "Would write" if args.dry_run else "Wrote"
+    print(
+        f"{verb} {len(summary.files)} file(s) "
+        f"({summary.written_rows} row(s)) to {output_dir}"
+    )
+    if summary.skipped_rows:
+        print(
+            f"  Skipped {summary.skipped_rows} row(s) with a blank "
+            f"{args.column!r} value."
+        )
+    for split_file in summary.files:
+        print(f"  {split_file.filename}  {split_file.rows} row(s)")
+    return 0
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     try:
         from .gui import run_gui  # noqa: PLC0415
@@ -404,6 +437,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_report.set_defaults(func="report")
 
+    p_split = sub.add_parser(
+        "split",
+        help="Split a concatenated DISA STIG CSV into one file per STIG title.",
+    )
+    p_split.add_argument(
+        "input", type=Path, help="Concatenated DISA STIG CSV to split."
+    )
+    p_split.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Destination directory (default: <input-stem>_split next to the input).",
+    )
+    p_split.add_argument(
+        "--column",
+        default="STIG",
+        help="Column to split on (default: STIG).",
+    )
+    p_split.add_argument(
+        "--dry-run", action="store_true", help="Preview only; write nothing."
+    )
+    p_split.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace existing output files (default: refuse).",
+    )
+    p_split.set_defaults(func="split")
+
     p_gui = sub.add_parser("gui", help="Open the graphical interface (needs PyQt6).")
     p_gui.set_defaults(func="gui")
 
@@ -424,6 +485,8 @@ def main(
             return _cmd_backup(args)
         if args.func == "gui":
             return _cmd_gui(args)
+        if args.func == "split":
+            return _cmd_split(args)
         real_backend = _require_backend(backend, args.view)
         if args.func == "check":
             return _cmd_check(args, real_backend)

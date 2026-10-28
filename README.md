@@ -40,9 +40,22 @@ stig-registry-toolkit fix --app chrome --check-id V-221558 --yes
 stig-registry-toolkit fix --app all --dry-run
 stig-registry-toolkit backup --dir C:\backups\stig-registry-toolkit
 stig-registry-toolkit restore --app chrome --yes
+stig-registry-toolkit split all_stigs.csv --dry-run
+stig-registry-toolkit split all_stigs.csv --output-dir C:\stigs\split
 ```
 
-Exit codes: `check`/`report` return 0 when nothing fails, 1 when checks fail or error, 2 for usage and platform errors. `fix` returns 1 when any fix fails.
+Exit codes: `check`/`report` return 0 when nothing fails, 1 when checks fail or error, 2 for usage and platform errors. `fix` returns 1 when any fix fails. `split` returns 0 on success and 2 for a missing file, a missing column, malformed CSV, or existing outputs without `--overwrite`.
+
+## Splitting a DISA export
+
+DISA ships STIGs as one concatenated CSV holding every benchmark. `split` turns it back into one CSV per STIG title, which is how the bundled Chrome/Adobe check data was originally prepared. It writes CSVs only; it does not convert a split file into the JSON check schema. Bring your own current export (the bundled checks have not been re-exported against current benchmarks; see below), and keep the export out of git: it is tens of megabytes and goes stale.
+
+```powershell
+stig-registry-toolkit split all_stigs.csv --dry-run   # preview: files + row counts, writes nothing
+stig-registry-toolkit split all_stigs.csv            # writes all_stigs_split\*.csv next to the input
+```
+
+Each output keeps the original header and rows for one title. Titles that sanitize to the same filename get distinct names (`A/B.csv` and `A_B__2.csv`), blank titles are skipped and counted, and an existing output file blocks the run unless you pass `--overwrite`.
 
 ## GUI
 
@@ -62,7 +75,7 @@ To use your own data, point `--data-dir` at a directory with `chrome.json`/`adob
 pip install ".[dev,gui]"
 ruff check src tests
 ruff format --check src tests
-mypy --follow-imports=silent src/stig_registry_toolkit/checks.py src/stig_registry_toolkit/registry.py src/stig_registry_toolkit/engine.py src/stig_registry_toolkit/backup.py src/stig_registry_toolkit/cli.py
+mypy --follow-imports=silent src/stig_registry_toolkit/checks.py src/stig_registry_toolkit/registry.py src/stig_registry_toolkit/engine.py src/stig_registry_toolkit/backup.py src/stig_registry_toolkit/cli.py src/stig_registry_toolkit/split.py
 pytest -q
 ```
 
@@ -76,7 +89,8 @@ src/stig_registry_toolkit/
   registry.py  winreg backend (one view) + in-memory fake for tests
   engine.py    Verify / fix, with re-verification
   backup.py    Per-value backups, restore, reg save hive backup
-  cli.py       check / fix / backup / restore / report / list / gui
+  cli.py       check / fix / backup / restore / report / list / gui / split
+  split.py     Split a concatenated DISA STIG CSV, one file per title
   gui.py       PyQt6 interface over the same engine
   data/        chrome.json (42 checks), adobe.json (26 checks)
 tests/         pytest suite, fake registry only

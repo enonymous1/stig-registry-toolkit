@@ -30,6 +30,7 @@ jobs:
           mypy --follow-imports=silent src/stig_registry_toolkit/checks.py
           src/stig_registry_toolkit/registry.py src/stig_registry_toolkit/engine.py
           src/stig_registry_toolkit/backup.py src/stig_registry_toolkit/cli.py
+          src/stig_registry_toolkit/split.py
       - name: Tests
         run: pytest -q
       - name: CLI smoke test

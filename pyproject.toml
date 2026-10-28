@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stig-registry-toolkit"
-version = "2.0.0"
+version = "2.1.0"
 description = "Check and enforce DISA STIG registry settings on Windows, from a CLI or a PyQt6 GUI."
 readme = "README.md"
 license = "MIT"
