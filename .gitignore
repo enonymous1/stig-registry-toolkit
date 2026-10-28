@@ -1,0 +1,33 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+/dist/
+/build/
+*.egg-info/
+.eggs/
+
+# Environments
+.venv/
+venv/
+env/
+.env
+
+# Test / type-check caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# Editors
+.idea/
+.vscode/
+
+# Local backups produced by stig-registry-toolkit runs (never commit hive dumps)
+stig-registry-toolkit-backups/
+*.hiv
+*.log

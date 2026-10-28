@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install ".[dev,gui]"
+      - name: Lint
+        run: ruff check src tests
+      - name: Format
+        run: ruff format --check src tests
+      - name: Type check (core)
+        # gui.py is followed but not strict-gated: PyQt6 ships no
+        # mypy stubs, so its errors are silenced here.
+        run: >-
+          mypy --follow-imports=silent src/stig_registry_toolkit/checks.py
+          src/stig_registry_toolkit/registry.py src/stig_registry_toolkit/engine.py
+          src/stig_registry_toolkit/backup.py src/stig_registry_toolkit/cli.py
+      - name: Tests
+        run: pytest -q
+      - name: CLI smoke test
+        run: stig-registry-toolkit --help
+      - name: GUI import smoke test
+        run: python -c "import stig_registry_toolkit.gui"
