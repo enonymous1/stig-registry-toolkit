@@ -17,8 +17,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install Qt system dependencies (Linux)
+        # PyQt6's wheels link system EGL/GL libraries that the Ubuntu
+        # runners do not ship; without them importing the GUI module
+        # fails with "libEGL.so.1: cannot open shared object file".
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update
+          && sudo apt-get install -y libegl1 libgl1 libxkbcommon0
+          libdbus-1-3 libfontconfig1
       - name: Install
-        run: pip install ".[dev,gui]"
+        # Gates run without the gui extra: mypy must not parse
+        # PyQt6's bundled stubs (6.12.0's are not parseable), and
+        # the tests never import the GUI module.
+        run: pip install ".[dev]"
       - name: Lint
         run: ruff check src tests
       - name: Format
@@ -33,6 +45,8 @@ jobs:
           src/stig_registry_toolkit/split.py
       - name: Tests
         run: pytest -q
+      - name: Install GUI extra
+        run: pip install ".[gui]"
       - name: CLI smoke test
         run: stig-registry-toolkit --help
       - name: GUI import smoke test
