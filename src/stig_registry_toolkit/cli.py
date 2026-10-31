@@ -18,34 +18,39 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .backup import (
+    DEFAULT_BACKUP_DIR,
     BackupError,
     BackupStore,
     backup_all_hives,
     restore_record,
 )
 from .checks import APPS, load_checks, resolve_app
-from .engine import CheckResult, fix_all, verify_all
-from .registry import RegistryBackend, RegistryUnavailableError, create_backend
+from .engine import CheckResult, can_auto_fix, fix_all, verify_all
+from .registry import (
+    RegistryBackend,
+    RegistryUnavailableError,
+    create_backend,
+    is_admin,
+)
 from .split import SplitError, split_stig_csv
 
-DEFAULT_BACKUP_DIR = Path("stig-registry-toolkit-backups")
 
+def _report_value(value: Any) -> Any:
+    """Make a registry value safe for JSON and CSV reports.
 
-def _is_admin() -> bool:
-    if os.name != "nt":
-        return True
-    try:
-        import ctypes  # noqa: PLC0415
-
-        windll = getattr(ctypes, "windll", None)
-        if windll is None:
-            return False
-        return bool(windll.shell32.IsUserAnAdmin() != 0)
-    except Exception:
-        return False
+    Bytes (REG_BINARY) are not JSON-serializable, so they become a
+    hex string; lists are converted element-wise for the same reason.
+    Everything else passes through unchanged.
+    """
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, (list, tuple)):
+        return [_report_value(item) for item in value]
+    return value
 
 
 def _require_backend(backend: RegistryBackend | None, view: str) -> RegistryBackend:
@@ -66,7 +71,7 @@ def format_results(app: str, results: list[CheckResult], fmt: str) -> str:
                 "test_type": r.check.test_type,
                 "status": r.status,
                 "detail": r.detail,
-                "actual": r.actual,
+                "actual": _report_value(r.actual),
                 "actual_type": r.actual_type,
             }
             for r in results
@@ -98,7 +103,7 @@ def format_results(app: str, results: list[CheckResult], fmt: str) -> str:
                     r.check.test_type,
                     r.status,
                     r.detail,
-                    r.actual,
+                    _report_value(r.actual),
                     r.actual_type,
                 ]
             )
@@ -119,12 +124,31 @@ def format_results(app: str, results: list[CheckResult], fmt: str) -> str:
 
 
 def _iter_apps(app_arg: str) -> list[str]:
+    """Canonical app keys for an --app value; "all" means every app."""
     if app_arg == "all":
         return list(APPS)
     return [resolve_app(app_arg)]
 
 
+def _require_confirmation(args: argparse.Namespace) -> int | None:
+    """Refuse a mutating command without --yes, unless it is a dry run.
+
+    Returns an exit code when the command must stop, else None.
+    ``fix`` and ``restore`` share this gate so the two can never drift
+    into different confirmation behavior.
+    """
+    if not args.yes and not args.dry_run:
+        print(
+            "Refusing to modify the registry without --yes. "
+            "Re-run with --dry-run to preview, or --yes to apply.",
+            file=sys.stderr,
+        )
+        return 2
+    return None
+
+
 def _cmd_check(args: argparse.Namespace, backend: RegistryBackend) -> int:
+    """Verify and print. Exit 1 when anything fails or errors."""
     exit_code = 0
     for app in _iter_apps(args.app):
         results = verify_all(load_checks(app, args.data_dir), backend)
@@ -135,15 +159,21 @@ def _cmd_check(args: argparse.Namespace, backend: RegistryBackend) -> int:
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
+    """List bundled checks. Never touches the registry."""
     for app in _iter_apps(args.app):
         print(f"{APPS[app]}:")
         for check in load_checks(app, args.data_dir):
             if check.is_automated:
-                target = (
-                    f"{check.hive}\\{check.path}\\{check.value_name} "
-                    f"({check.reg_type}) = {check.expected!r}"
-                    + (f" pattern {check.pattern!r}" if check.pattern else "")
-                )
+                if check.pattern is not None:
+                    target = (
+                        f"{check.hive}\\{check.path}\\{check.value_name} "
+                        f"({check.reg_type}) must match pattern {check.pattern!r}"
+                    )
+                else:
+                    target = (
+                        f"{check.hive}\\{check.path}\\{check.value_name} "
+                        f"({check.reg_type}) = {check.expected!r}"
+                    )
             else:
                 target = "manual (no registry target)"
             print(f"  {check.id} [{check.severity}] {check.title} -- {target}")
@@ -151,14 +181,11 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_fix(args: argparse.Namespace, backend: RegistryBackend) -> int:
-    if not args.yes and not args.dry_run:
-        print(
-            "Refusing to modify the registry without --yes. "
-            "Re-run with --dry-run to preview, or --yes to apply.",
-            file=sys.stderr,
-        )
-        return 2
-    if not _is_admin() and not args.dry_run:
+    """Apply fixes, or preview them with --dry-run. Exit 1 if any fix fails."""
+    refused = _require_confirmation(args)
+    if refused is not None:
+        return refused
+    if os.name == "nt" and not is_admin() and not args.dry_run:
         print(
             "Warning: not running as administrator; registry writes "
             "will likely be denied.",
@@ -180,7 +207,12 @@ def _cmd_fix(args: argparse.Namespace, backend: RegistryBackend) -> int:
                 return 2
         if args.dry_run:
             results = verify_all(checks, backend)
-            fixable = [r for r in results if r.status == "fail"]
+            # Count only what a real run would write. Failing pattern
+            # and manual checks are never auto-fixed, so counting
+            # every failure here would promise fixes that never happen.
+            fixable = [
+                r for r in results if r.status == "fail" and can_auto_fix(r.check)
+            ]
             print(
                 f"{APPS[app]} dry run: {len(fixable)} failing check(s) "
                 "would be fixed, "
@@ -203,6 +235,7 @@ def _cmd_fix(args: argparse.Namespace, backend: RegistryBackend) -> int:
 
 
 def _cmd_backup(args: argparse.Namespace) -> int:
+    """Back up hives with reg save. Exit 1 when a hive backup fails."""
     from .backup import HIVES_TO_BACKUP
 
     if args.hives:
@@ -229,25 +262,22 @@ def _cmd_backup(args: argparse.Namespace) -> int:
 
 
 def _cmd_restore(args: argparse.Namespace, backend: RegistryBackend) -> int:
-    if not args.yes and not args.dry_run:
-        print(
-            "Refusing to modify the registry without --yes. "
-            "Re-run with --dry-run to preview, or --yes to apply.",
-            file=sys.stderr,
-        )
-        return 2
+    """Restore per-value backups, or preview them with --dry-run."""
+    refused = _require_confirmation(args)
+    if refused is not None:
+        return refused
     store = BackupStore(args.backup_dir)
     exit_code = 0
-    for app in _iter_apps(args.app):
+    for app_key in _iter_apps(args.app):
         if args.check_id:
-            targets = [(app, check_id) for check_id in args.check_id]
+            targets = [(app_key, check_id) for check_id in args.check_id]
         else:
-            targets = [(app, r.check_id) for r in store.latest_for_app(app)]
+            targets = [(app_key, r.check_id) for r in store.latest_for_app(app_key)]
         if not targets:
-            print(f"{APPS[app]}: no backups recorded in {args.backup_dir}.")
+            print(f"{APPS[app_key]}: no backups recorded in {args.backup_dir}.")
             continue
-        for app_key, check_id in targets:
-            record = store.latest(app_key, check_id)
+        for target_app, check_id in targets:
+            record = store.latest(target_app, check_id)
             if record is None:
                 print(f"  SKIP {check_id}: no backup recorded.")
                 continue
@@ -269,6 +299,7 @@ def _cmd_restore(args: argparse.Namespace, backend: RegistryBackend) -> int:
 
 
 def _cmd_report(args: argparse.Namespace, backend: RegistryBackend) -> int:
+    """Verify and print (or write) a report. Exit 1 when anything fails."""
     exit_code = 0
     chunks: list[str] = []
     for app in _iter_apps(args.app):
@@ -503,6 +534,11 @@ def main(
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     except BackupError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # Report writes, backup directories, and other filesystem
+        # failures must fail as a clean error, not a traceback.
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 2

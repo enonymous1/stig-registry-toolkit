@@ -1,16 +1,50 @@
 # STIG Registry Toolkit
 
-**Check a Windows machine against DISA STIG registry settings, and fix what fails, with the prior value backed up first.**
+[![CI](https://github.com/enonymous1/stig-registry-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/enonymous1/stig-registry-toolkit/actions)
 
-STIG Registry Toolkit verifies Google Chrome (42 checks) and Adobe Acrobat Reader DC (26 checks) registry policies against their STIG expectations, shows what fails and why, and applies fixes only when you confirm. Every fix records the old value before writing, re-verifies after writing, and can be undone with one command. Results are never baked into the data files: status is computed live, every run, so a report always describes *this* machine, right now.
+## Description
+
+STIG Registry Toolkit checks a Windows machine against DISA STIG registry settings, and fixes what fails, with the prior value backed up first.
+
+It verifies Google Chrome (42 checks) and Adobe Acrobat Reader DC (26 checks) registry policies against their STIG expectations, shows what fails and why, and applies fixes only when you confirm. Every fix records the old value before writing, re-verifies after writing, and can be undone with one command. Results are never baked into the data files: status is computed live, every run, so a report always describes *this* machine, right now.
+
+It also ships `split`, a prep tool that turns a concatenated DISA STIG CSV export back into one CSV per STIG title, which is how the bundled Chrome and Adobe check data was originally prepared.
+
+## Architecture
+
+![Architecture diagram](docs/assets/architecture.svg)
+
+The CLI and the PyQt6 GUI are thin fronts over one engine. `engine.py` verifies and fixes; `checks.py` loads and validates the bundled JSON data; `registry.py` hides Windows `winreg` behind a backend interface (with an in-memory fake backend the test suite runs against); `backup.py` owns per-value backups and `reg save` hive backups. `split.py` is standalone and never touches the registry.
+
+## Prerequisites
+
+- **Windows 10 or 11** for registry operations (`check`, `fix`, `restore`, `backup`, and the GUI's verify/fix actions). On Linux or macOS those commands report that the registry is unavailable instead of pretending to run; `list`, `report` against bundled data, and `split` still work.
+- **Python 3.10, 3.11, or 3.12.**
+- **Administrator rights** on Windows to apply fixes or back up hives. Verification works without elevation.
+- **PyQt6** for the GUI only (the `gui` extra). The CLI core has no third-party dependencies.
+- For contributors running the GUI import test on Linux: the Qt system libraries (`libegl1`, `libgl1`, `libxkbcommon0`, `libdbus-1-3`, `libfontconfig1`). CI installs these on Ubuntu runners; see [Local Development](#local-development).
+
+## Installation
+
+This package is not published to PyPI yet. Install it from a clone:
+
+```powershell
+git clone https://github.com/enonymous1/stig-registry-toolkit.git
+cd stig-registry-toolkit
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install ".[gui]"     # CLI + GUI
+```
+
+For the CLI only, omit the extra:
+
+```powershell
+pip install .
+```
 
 ## Quick start (Windows, PowerShell, as Administrator)
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install "stig-registry-toolkit[gui]"
-
 stig-registry-toolkit check                    # verify everything, no changes
 stig-registry-toolkit fix --dry-run            # preview what would change
 stig-registry-toolkit fix --yes                # apply fixes, backing up prior values
@@ -18,14 +52,12 @@ stig-registry-toolkit restore --yes            # undo the last fixes from their 
 stig-registry-toolkit gui                      # graphical interface
 ```
 
-Without the GUI extra, `pip install stig-registry-toolkit` gives you the CLI only. The core has no third-party dependencies and no registry access on non-Windows machines, where `check`/`fix` report that the registry is unavailable instead of pretending to run.
-
 ## How fixes stay safe
 
 - **Confirm first.** `fix` and `restore` refuse to change the registry without `--yes`. `--dry-run` previews without touching anything.
-- **Back up first.** Each fix writes the current value (or its absence) to `stig-registry-toolkit-backups/backups.json` before changing it. `stig-registry-toolkit restore --yes` puts those values back.
+- **Back up first.** Each fix writes the current value (or its absence) to `stig-registry-toolkit-backups/backups.json` before changing it. `stig-registry-toolkit restore --yes` puts those values back. The backup file is versioned and written atomically, so an interrupted run cannot leave a half-written store.
 - **Re-verify after.** A fix that doesn't re-verify as passing is reported as failed, not as applied.
-- **No silent skips.** Manual checks and pattern checks (one Chrome check requires a URL matching `^https`) are never auto-fixed; they say so and tell you what to set by hand.
+- **No silent skips.** Manual checks (3 of the 68) and pattern checks (one Chrome check requires a URL matching `^https`) are never auto-fixed; they say so and tell you what to set by hand. A dry run counts only checks a real run would actually write.
 - **One registry view.** Reads and writes both use the 64-bit view by default (`--view 32` to change it), so a check can't read one view and fix another.
 - **Whole-hive safety net.** `stig-registry-toolkit backup` saves SYSTEM, SOFTWARE, and CURRENT_USER with `reg save`. Restoring a whole hive is a `reg restore` from an elevated prompt; per-value restore is the normal undo path.
 
@@ -44,7 +76,7 @@ stig-registry-toolkit split all_stigs.csv --dry-run
 stig-registry-toolkit split all_stigs.csv --output-dir C:\stigs\split
 ```
 
-Exit codes: `check`/`report` return 0 when nothing fails, 1 when checks fail or error, 2 for usage and platform errors. `fix` returns 1 when any fix fails. `split` returns 0 on success and 2 for a missing file, a missing column, malformed CSV, or existing outputs without `--overwrite`.
+Exit codes: `check`/`report` return 0 when nothing fails, 1 when checks fail or error, 2 for usage and platform errors. `fix` returns 1 when any fix fails. `split` returns 0 on success and 2 for a missing file, a missing column, malformed CSV, or existing outputs without `--overwrite`. Filesystem failures (for example, an unwritable report path) fail with a clean error message and exit code 1, not a traceback.
 
 ## Splitting a DISA export
 
@@ -55,7 +87,7 @@ stig-registry-toolkit split all_stigs.csv --dry-run   # preview: files + row cou
 stig-registry-toolkit split all_stigs.csv            # writes all_stigs_split\*.csv next to the input
 ```
 
-Each output keeps the original header and rows for one title. Titles that sanitize to the same filename get distinct names (`A/B.csv` and `A_B__2.csv`), blank titles are skipped and counted, and an existing output file blocks the run unless you pass `--overwrite`.
+Each output keeps the original header and rows for one title. Titles that sanitize to the same filename get distinct names (`A/B.csv` and `A_B__2.csv`), blank titles are skipped and counted, and an existing output file blocks the run unless you pass `--overwrite`. Input is read as UTF-8 with an optional byte-order mark, so exports saved from Windows tools split without a spurious "missing column" error.
 
 ## GUI
 
@@ -69,17 +101,36 @@ The data was converted from the 1.x tool's bundled files into that one schema. T
 
 To use your own data, point `--data-dir` at a directory with `chrome.json`/`adobe.json` in the same schema (schema version 1). Unknown fields, bad regexes, and missing registry targets fail loudly at load time.
 
-## Development
+## Local Development
 
 ```powershell
-pip install ".[dev,gui]"
+git clone https://github.com/enonymous1/stig-registry-toolkit.git
+cd stig-registry-toolkit
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install ".[dev]"      # gates first, without the GUI extra
 ruff check src tests
 ruff format --check src tests
 mypy --follow-imports=silent src/stig_registry_toolkit/checks.py src/stig_registry_toolkit/registry.py src/stig_registry_toolkit/engine.py src/stig_registry_toolkit/backup.py src/stig_registry_toolkit/cli.py src/stig_registry_toolkit/split.py
 pytest -q
+pip install ".[gui]"      # only now, for the GUI smoke test
+python -c "import stig_registry_toolkit.gui"
 ```
 
-Tests run against an in-memory fake registry, so the full suite passes on Linux and macOS. A real Windows run is still the gate for registry behavior: launch the GUI, verify Chrome from a clean state, fix one failing check, and restore it. CI runs the same gates on Ubuntu and Windows.
+Install the GUI extra after the gates on purpose: PyQt6 6.12.0's bundled type stubs are not parseable by mypy, so the type check runs before PyQt6 is present (CI does the same split). Tests run against an in-memory fake registry, so the full suite passes on Linux and macOS. The version lives in exactly one place, `src/stig_registry_toolkit/__init__.py`; the package metadata reads it from there, so a release never has to change the version twice.
+
+A real Windows run is still the gate for registry behavior: launch the GUI, verify Chrome from a clean state, fix one failing check, and restore it. CI runs the same gates on Ubuntu and Windows.
+
+## Deployment
+
+CI runs on every push to `main` and every pull request, on Ubuntu and Windows across Python 3.10–3.12. A green main is the deployable state; there is no separate staging environment and no PyPI publishing configured yet.
+
+To cut a release:
+
+1. Bump the version in `src/stig_registry_toolkit/__init__.py` (the single source of truth).
+2. Add a CHANGELOG entry describing the release.
+3. Commit, then tag the release (`git tag vX.Y.Z`) and push the tag.
+4. Publish the release notes on GitHub from the tag.
 
 ## Layout
 
@@ -93,8 +144,14 @@ src/stig_registry_toolkit/
   split.py     Split a concatenated DISA STIG CSV, one file per title
   gui.py       PyQt6 interface over the same engine
   data/        chrome.json (42 checks), adobe.json (26 checks)
+docs/assets/
+  architecture.svg  Module diagram (shown above)
 tests/         pytest suite, fake registry only
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Disclaimer
 

@@ -90,3 +90,37 @@ def test_corrupt_store_raises(tmp_path):
     store.path.write_text("{bad json", encoding="utf-8")
     with pytest.raises(BackupError, match="corrupt"):
         store.load_records()
+
+
+def test_store_does_not_create_directory_on_open(tmp_path):
+    directory = tmp_path / "not-created"
+    store = BackupStore(directory)
+    assert not directory.exists()
+    assert store.load_records() == []
+    check = load_checks("chrome")[0]
+    store.record("chrome", check, PriorState(existed=False))
+    assert directory.exists()
+    assert (directory / "backups.json").exists()
+
+
+def test_store_format_is_versioned_and_reads_legacy(tmp_path):
+    import json
+
+    store = BackupStore(tmp_path)
+    check = load_checks("chrome")[0]
+    store.record(
+        "chrome", check, PriorState(existed=True, value=1, reg_type="REG_DWORD")
+    )
+    raw = json.loads(store.path.read_text(encoding="utf-8"))
+    assert raw["version"] == 1
+    assert len(raw["records"]) == 1
+    # Files written by 2.1.0 and earlier are a bare records list.
+    store.path.write_text(json.dumps(raw["records"]), encoding="utf-8")
+    assert len(store.load_records()) == 1
+    # Unknown versions and wrong shapes fail as corrupt, not KeyError.
+    store.path.write_text(json.dumps({"version": 99, "records": []}), encoding="utf-8")
+    with pytest.raises(BackupError, match="corrupt"):
+        store.load_records()
+    store.path.write_text(json.dumps({"version": 1}), encoding="utf-8")
+    with pytest.raises(BackupError, match="corrupt"):
+        store.load_records()

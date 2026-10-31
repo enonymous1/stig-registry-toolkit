@@ -5,6 +5,11 @@ content with the check's expectation. Fixing always verifies first,
 records the prior value in a backup store, writes, then re-verifies.
 A fix that does not re-verify as passing is reported as failed, never
 as silently applied.
+
+Contract: callers pass checks that have already been validated by
+``checks.check_from_dict`` (the bundled loader validates every check
+at load time). The ``assert`` statements below encode that contract;
+they are not input validation for untrusted data.
 """
 
 from __future__ import annotations
@@ -42,6 +47,18 @@ class FixOutcome:
     backup_recorded: bool = False
 
 
+def can_auto_fix(check: Check) -> bool:
+    """True when ``fix_check`` would actually write for this check.
+
+    Manual checks have no target and pattern checks have no single
+    value to write, so neither is ever auto-fixed. Every caller that
+    previews, counts, or lists "fixable" checks must use this one
+    definition, or previews and real runs disagree about what a fix
+    will do.
+    """
+    return check.is_automated and check.pattern is None
+
+
 def _compare(check: Check, actual: Any, actual_type: str) -> CheckResult:
     assert check.reg_type is not None
     expected_type = check.reg_type.upper()
@@ -54,6 +71,9 @@ def _compare(check: Check, actual: Any, actual_type: str) -> CheckResult:
             actual_type,
         )
     if check.pattern is not None:
+        # Patterns are searched, not full-matched: anchors in the
+        # pattern (for example "^https") do the restricting, so a
+        # pattern without anchors matches a substring by design.
         text = actual if isinstance(actual, str) else str(actual)
         if re.search(check.pattern, text):
             return CheckResult(

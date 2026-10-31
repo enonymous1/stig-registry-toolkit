@@ -165,3 +165,66 @@ def test_format_results_csv_and_text():
     csv_text = format_results("adobe", results, "csv")
     assert csv_text.splitlines()[0].startswith("app,id,title")
     assert len(csv_text.splitlines()) == 3
+
+
+def test_format_results_json_handles_binary_values():
+    from stig_registry_toolkit.checks import Check
+    from stig_registry_toolkit.engine import CheckResult
+
+    check = Check(
+        id="V-999999",
+        title="Binary check",
+        severity="medium",
+        test_type="automated",
+        description="d",
+        fix_text="f",
+        reference=None,
+        rule_id=None,
+        hive="HKEY_LOCAL_MACHINE",
+        path=r"SOFTWARE\X",
+        value_name="Blob",
+        reg_type="REG_BINARY",
+        expected=b"\x01\x02",
+        pattern=None,
+    )
+    result = CheckResult(
+        check, "pass", "ok", actual=b"\x01\x02", actual_type="REG_BINARY"
+    )
+    payload = json.loads(format_results("chrome", [result], "json"))
+    assert payload[0]["actual"] == "0102"
+
+
+def test_dry_run_does_not_count_pattern_checks_as_fixable(capsys):
+    # The only failing check is the pattern check: a dry run must
+    # report zero fixable checks, because a real run would not write
+    # anything for it either.
+    backend = FakeRegistryBackend()
+    pattern = next(c for c in load_checks("chrome") if c.pattern is not None)
+    backend.seed(
+        pattern.hive, pattern.path, pattern.value_name, "REG_SZ", "ftp://not-https"
+    )
+    before = backend.snapshot()
+    code = main(
+        ["fix", "--app", "chrome", "--check-id", pattern.id, "--dry-run"],
+        backend=backend,
+    )
+    assert code == 0
+    assert "0 failing check(s) would be fixed" in capsys.readouterr().out
+    assert backend.snapshot() == before
+
+
+def test_report_write_failure_is_clean_error(tmp_path: Path):
+    backend = FakeRegistryBackend()
+    code = main(
+        [
+            "report",
+            "--app",
+            "adobe",
+            "--format",
+            "json",
+            "--output",
+            str(tmp_path / "no-such-dir" / "report.json"),
+        ],
+        backend=backend,
+    )
+    assert code == 1  # unwritable output, not a traceback

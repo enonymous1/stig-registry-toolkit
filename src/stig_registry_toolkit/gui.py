@@ -19,25 +19,28 @@ from typing import Any
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from .backup import BackupError, BackupStore, backup_all_hives
+from .backup import (
+    DEFAULT_BACKUP_DIR,
+    BackupError,
+    BackupStore,
+    backup_all_hives,
+    restore_record,
+)
 from .checks import APPS, Check, load_checks
-from .cli import DEFAULT_BACKUP_DIR
-from .engine import CheckResult, FixOutcome, fix_all, fix_check, verify_all
-from .registry import RegistryBackend, RegistryUnavailableError, create_backend
-
-
-def _is_admin() -> bool:
-    if os.name != "nt":
-        return False
-    try:
-        import ctypes  # noqa: PLC0415
-
-        windll = getattr(ctypes, "windll", None)
-        if windll is None:
-            return False
-        return bool(windll.shell32.IsUserAnAdmin() != 0)
-    except Exception:
-        return False
+from .engine import (
+    CheckResult,
+    FixOutcome,
+    can_auto_fix,
+    fix_all,
+    fix_check,
+    verify_all,
+)
+from .registry import (
+    RegistryBackend,
+    RegistryUnavailableError,
+    create_backend,
+    is_admin,
+)
 
 
 def _details_html(check: Check, result: CheckResult | None) -> str:
@@ -84,7 +87,13 @@ def _details_html(check: Check, result: CheckResult | None) -> str:
 
 
 class CheckPanel(QtWidgets.QWidget):
-    """One app's checks: table, details, verify/fix/restore."""
+    """One app's checks: table, details, verify/fix/restore.
+
+    The panel verifies on load so the table always shows live status,
+    never a stale snapshot. Table sorting stays off on purpose: the
+    row index is the check's identity (see ``_selected_check``), and
+    a sorted table would make "Fix Selected" act on the wrong check.
+    """
 
     def __init__(
         self,
@@ -239,6 +248,7 @@ class CheckPanel(QtWidgets.QWidget):
             for c in self.checks
             if self.results.get(c.id) is not None
             and self.results[c.id].status == "fail"
+            and can_auto_fix(c)
         ]
         if not failing:
             QtWidgets.QMessageBox.information(
@@ -288,8 +298,6 @@ class CheckPanel(QtWidgets.QWidget):
             f"(recorded {record.timestamp})?",
         ):
             return
-        from .backup import restore_record  # noqa: PLC0415
-
         try:
             detail = restore_record(self.backend, record)
         except Exception as exc:  # noqa: BLE001 - show the error to the user
@@ -300,6 +308,13 @@ class CheckPanel(QtWidgets.QWidget):
 
 
 class HiveBackupWorker(QObject):
+    """Runs ``reg save`` off the UI thread.
+
+    A hive backup can take minutes on a large hive; running it on
+    the UI thread would freeze the window with no way to cancel or
+    even repaint. Results come back through signals only.
+    """
+
     finished = pyqtSignal(str)
     failed = pyqtSignal(str)
 
@@ -394,6 +409,8 @@ class BackupTab(QtWidgets.QWidget):
 
 
 class MainWindow(QtWidgets.QMainWindow):
+    """The application window: one Backup tab plus one tab per app."""
+
     def __init__(
         self,
         backend: RegistryBackend | None,
@@ -404,7 +421,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("STIG Registry Toolkit")
         self.setGeometry(100, 100, 1100, 800)
 
-        if os.name == "nt" and not _is_admin():
+        if os.name == "nt" and not is_admin():
             QtWidgets.QMessageBox.warning(
                 self,
                 "Not running as administrator",
@@ -430,10 +447,6 @@ def run_gui(
 ) -> int:
     """Create the application and show the main window."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    if hasattr(QtCore.Qt.ApplicationAttribute, "AA_EnableHighDpiScaling"):
-        QtWidgets.QApplication.setAttribute(
-            QtCore.Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True
-        )
     try:
         backend: RegistryBackend | None = create_backend(view=view)
     except RegistryUnavailableError:

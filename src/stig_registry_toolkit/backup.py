@@ -8,6 +8,7 @@ are a separate, coarser safety net and live in the same directory.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import os
@@ -28,6 +29,17 @@ from .registry import (
 
 class BackupError(Exception):
     """A backup or restore operation failed."""
+
+
+# Default directory for per-value backups (and hive dumps). The CLI
+# and GUI share this one constant instead of each spelling it out.
+DEFAULT_BACKUP_DIR = Path("stig-registry-toolkit-backups")
+
+# Format version of backups.json. Version 1 is the {"version", "records"}
+# object; files written by 2.1.0 and earlier are a bare records list
+# and still load (see ``load_records``). Bump this only with a loader
+# that still reads every older version.
+STORE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -91,20 +103,36 @@ def _record_from_dict(data: dict[str, Any]) -> BackupRecord:
     )
 
 
+def _records_to_dict(records: list[BackupRecord]) -> dict[str, Any]:
+    return {
+        "version": STORE_VERSION,
+        "records": [_record_to_dict(r) for r in records],
+    }
+
+
 class BackupStore:
-    """Append-only JSON store of per-value prior states."""
+    """Append-only JSON store of per-value prior states.
+
+    The store file is versioned (see ``STORE_VERSION``) and written
+    atomically: a crash mid-write leaves either the old file or the
+    new one, never a half-written backups.json.
+    """
 
     FILENAME = "backups.json"
 
     def __init__(self, directory: str | Path) -> None:
+        # Deliberately no mkdir here: merely opening the store to
+        # read (for example, a restore preview) must not create a
+        # backup directory as a side effect. The directory is
+        # created by record(), the only operation that writes.
         self.directory = Path(directory)
-        self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / self.FILENAME
 
     def record(self, app: str, check: Check, prior: PriorState) -> BackupRecord:
         """Append one record. Callers must pass the pre-fix state."""
         assert check.hive is not None and check.path is not None
         assert check.value_name is not None
+        self.directory.mkdir(parents=True, exist_ok=True)
         record = BackupRecord(
             timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             app=app,
@@ -116,10 +144,16 @@ class BackupStore:
         )
         records = self.load_records()
         records.append(record)
-        self.path.write_text(
-            json.dumps([_record_to_dict(r) for r in records], indent=2),
-            encoding="utf-8",
-        )
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        try:
+            tmp.write_text(
+                json.dumps(_records_to_dict(records), indent=2),
+                encoding="utf-8",
+            )
+            os.replace(tmp, self.path)
+        finally:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
         return record
 
     def load_records(self) -> list[BackupRecord]:
@@ -129,9 +163,23 @@ class BackupStore:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise BackupError(f"backup store is corrupt: {self.path}: {exc}") from exc
-        if not isinstance(raw, list):
-            raise BackupError(f"backup store is corrupt: {self.path}")
-        return [_record_from_dict(item) for item in raw]
+        if isinstance(raw, list):
+            # Written by 2.1.0 and earlier (bare records list).
+            data = raw
+        elif (
+            isinstance(raw, dict)
+            and raw.get("version") == STORE_VERSION
+            and isinstance(raw.get("records"), list)
+        ):
+            data = raw["records"]
+        else:
+            raise BackupError(
+                f"backup store is corrupt: {self.path} (unknown format or version)"
+            )
+        try:
+            return [_record_from_dict(item) for item in data]
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise BackupError(f"backup store is corrupt: {self.path}: {exc}") from exc
 
     def latest(self, app: str, check_id: str) -> BackupRecord | None:
         """The most recent record for one check, or None."""
@@ -212,6 +260,12 @@ def backup_hive(hive_path: str, directory: str | Path) -> Path:
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     leaf = hive_path.rsplit("\\", 1)[-1].replace(" ", "_")
     dest = dest_dir / f"registry_backup_{leaf}_{stamp}.hiv"
+    # Two backups of one hive within the same second must not silently
+    # overwrite each other (reg save is called with /y).
+    suffix = 2
+    while dest.exists():
+        dest = dest_dir / f"registry_backup_{leaf}_{stamp}_{suffix}.hiv"
+        suffix += 1
     startupinfo: Any = None
     if os.name == "nt":
         # STARTUPINFO exists only on Windows; getattr keeps this
@@ -222,7 +276,7 @@ def backup_hive(hive_path: str, directory: str | Path) -> Path:
             startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
             startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
     try:
-        completed = subprocess.run(
+        subprocess.run(
             ["reg", "save", hive_path, str(dest), "/y"],
             check=True,
             capture_output=True,
@@ -239,7 +293,6 @@ def backup_hive(hive_path: str, directory: str | Path) -> Path:
         raise BackupError(f"failed to back up {hive_path}: {detail}") from exc
     if not dest.exists() or dest.stat().st_size == 0:
         raise BackupError(f"reg save reported success but {dest} is empty")
-    _ = completed
     return dest
 
 

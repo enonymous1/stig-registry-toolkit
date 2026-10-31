@@ -52,6 +52,20 @@ def test_split_basic(tmp_path: Path):
     assert _read_csv(out / "Beta.csv") == [HEADER, ["Beta", "V-2", "Second"]]
 
 
+def test_bom_prefixed_csv_splits(tmp_path: Path):
+    # Exports saved from Windows tools often start with a UTF-8 BOM;
+    # the header must still be recognized as STIG, not "\ufeffSTIG".
+    src = tmp_path / "bom.csv"
+    src.write_bytes(b"\xef\xbb\xbfSTIG,Vuln ID,Rule Title\nAlpha,V-1,First\n")
+    summary = split_stig_csv(src, tmp_path / "out")
+    assert summary.total_rows == 1
+    assert {f.filename for f in summary.files} == {"Alpha.csv"}
+    assert _read_csv(tmp_path / "out" / "Alpha.csv") == [
+        HEADER,
+        ["Alpha", "V-1", "First"],
+    ]
+
+
 def test_split_many_groups_exceeds_writer_cache(tmp_path: Path):
     # 40 groups > _MAX_OPEN_WRITERS (32): eviction/reopen must not
     # lose rows or duplicate headers.

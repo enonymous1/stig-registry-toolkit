@@ -10,6 +10,7 @@ unless a caller explicitly passes it in.
 from __future__ import annotations
 
 import re
+from abc import ABC, abstractmethod
 from typing import Any
 
 # Numeric codes match the ``winreg`` constants, so stored types compare
@@ -52,6 +53,34 @@ HIVES = frozenset(
 
 _HEX_RE = re.compile(r"^0[xX][0-9a-fA-F]+$")
 _INT_RE = re.compile(r"^-?\d+$")
+
+# Inclusive bounds for the Windows integer types. winreg rejects
+# out-of-range values at write time with an opaque OverflowError, so
+# the range is checked here, where the failure names the value.
+_DWORD_MAX = 2**32 - 1
+_QWORD_MAX = 2**64 - 1
+
+
+def is_admin() -> bool:
+    """True only for a genuinely elevated Windows process.
+
+    Off Windows this is always False: there is no Windows admin
+    concept to report. Callers that only care about the Windows case
+    guard with ``os.name == "nt"`` instead of treating False here
+    as "needs a warning on every platform".
+    """
+    import ctypes  # noqa: PLC0415
+    import os
+
+    if os.name != "nt":
+        return False
+    try:
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            return False
+        return bool(windll.shell32.IsUserAnAdmin() != 0)
+    except Exception:
+        return False
 
 
 class RegistryError(Exception):
@@ -106,17 +135,26 @@ def coerce_value(reg_type: str, value: Any) -> Any:
         "REG_QWORD",
         "REG_QWORD_LITTLE_ENDIAN",
     ):
+        limit = _DWORD_MAX if "QWORD" not in upper else _QWORD_MAX
         if isinstance(value, bool):
             raise TypeError(f"{upper} value must be an int, got bool")
         if isinstance(value, int):
-            return value
-        if isinstance(value, str):
+            parsed = value
+        elif isinstance(value, str):
             text = value.strip()
             if _HEX_RE.match(text):
-                return int(text, 16)
-            if _INT_RE.match(text):
-                return int(text, 10)
-        raise TypeError(f"{upper} value must be an int, got {value!r}")
+                parsed = int(text, 16)
+            elif _INT_RE.match(text):
+                parsed = int(text, 10)
+            else:
+                raise TypeError(f"{upper} value must be an int, got {value!r}")
+        else:
+            raise TypeError(f"{upper} value must be an int, got {value!r}")
+        if not 0 <= parsed <= limit:
+            raise ValueError(
+                f"{upper} value must be between 0 and {limit}, got {parsed}"
+            )
+        return parsed
     if upper in ("REG_SZ", "REG_EXPAND_SZ"):
         if not isinstance(value, str):
             raise TypeError(f"{upper} value must be a string, got {value!r}")
@@ -148,15 +186,17 @@ def coerce_value(reg_type: str, value: Any) -> Any:
     return value
 
 
-class RegistryBackend:
+class RegistryBackend(ABC):
     """Interface every registry backend implements."""
 
     view: str
 
+    @abstractmethod
     def read(self, hive: str, path: str, value_name: str) -> tuple[Any, str]:
         """Return ``(value, reg_type_name)`` or raise RegistryNotFoundError."""
         raise NotImplementedError
 
+    @abstractmethod
     def write(
         self,
         hive: str,
@@ -171,9 +211,11 @@ class RegistryBackend:
         and ``create_keys`` is False."""
         raise NotImplementedError
 
+    @abstractmethod
     def delete_value(self, hive: str, path: str, value_name: str) -> None:
         raise NotImplementedError
 
+    @abstractmethod
     def key_exists(self, hive: str, path: str) -> bool:
         raise NotImplementedError
 
@@ -313,8 +355,17 @@ class WinRegBackend(RegistryBackend):
                 winreg.KEY_READ | self._view_flag,
             ):
                 return True
-        except (FileNotFoundError, OSError):
+        except FileNotFoundError:
             return False
+        except PermissionError as exc:
+            # Denied access is not absence: callers must not conclude
+            # a key is missing when they simply cannot read it.
+            raise RegistryPermissionError(
+                f"permission denied reading {normalize_hive(hive)}\\"
+                f"{normalize_path(path)}; run as administrator"
+            ) from exc
+        except OSError as exc:
+            raise self._wrap_os_error(exc, hive, normalize_path(path)) from exc
 
 
 class FakeRegistryBackend(RegistryBackend):

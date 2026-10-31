@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="540" viewBox="0 0 900 540" font-family="system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5b6b7f"/>
+    </marker>
+    <style>
+      .box { fill: #f4f7fa; stroke: #5b6b7f; stroke-width: 1.5; rx: 10; }
+      .entry { fill: #e8f0e8; stroke: #3d7a44; stroke-width: 1.5; rx: 10; }
+      .data { fill: #fdf6e3; stroke: #a67c00; stroke-width: 1.5; rx: 10; }
+      .title { font-size: 15px; font-weight: 700; fill: #1f2a37; }
+      .sub { font-size: 12px; fill: #4b5563; }
+      .lbl { font-size: 11px; fill: #5b6b7f; }
+    </style>
+  </defs>
+
+  <text x="450" y="28" text-anchor="middle" class="title">STIG Registry Toolkit — Architecture</text>
+
+  <!-- Entry points -->
+  <rect x="90" y="55" width="300" height="64" class="entry"/>
+  <text x="240" y="80" text-anchor="middle" class="title">CLI</text>
+  <text x="240" y="100" text-anchor="middle" class="sub">stig-registry-toolkit check / fix / restore / report / list / split / gui</text>
+  <rect x="510" y="55" width="300" height="64" class="entry"/>
+  <text x="660" y="80" text-anchor="middle" class="title">GUI (PyQt6)</text>
+  <text x="660" y="100" text-anchor="middle" class="sub">Check panels + Backup tab, same engine as the CLI</text>
+
+  <!-- Core -->
+  <rect x="270" y="165" width="360" height="84" class="box"/>
+  <text x="450" y="190" text-anchor="middle" class="title">engine.py — verify / fix</text>
+  <text x="450" y="210" text-anchor="middle" class="sub">Verify first, back up prior value, write, re-verify.</text>
+  <text x="450" y="228" text-anchor="middle" class="sub">Pattern and manual checks are never auto-fixed.</text>
+
+  <rect x="30" y="165" width="200" height="84" class="box"/>
+  <text x="130" y="190" text-anchor="middle" class="title">checks.py</text>
+  <text x="130" y="210" text-anchor="middle" class="sub">Check model + schema v1</text>
+  <text x="130" y="228" text-anchor="middle" class="sub">validation at load time</text>
+
+  <rect x="670" y="165" width="200" height="84" class="box"/>
+  <text x="770" y="190" text-anchor="middle" class="title">split.py</text>
+  <text x="770" y="210" text-anchor="middle" class="sub">Split a DISA CSV export,</text>
+  <text x="770" y="228" text-anchor="middle" class="sub">one file per STIG title</text>
+
+  <!-- Data -->
+  <rect x="30" y="295" width="200" height="64" class="data"/>
+  <text x="130" y="320" text-anchor="middle" class="title">data/</text>
+  <text x="130" y="340" text-anchor="middle" class="sub">chrome.json (42) · adobe.json (26)</text>
+
+  <!-- Backends -->
+  <rect x="270" y="295" width="360" height="84" class="box"/>
+  <text x="450" y="320" text-anchor="middle" class="title">RegistryBackend (one view: 64-bit default)</text>
+  <text x="450" y="340" text-anchor="middle" class="sub">WinRegBackend (winreg, Windows only) · FakeRegistryBackend (tests)</text>
+  <text x="450" y="360" text-anchor="middle" class="sub">Reads and writes always use the same view</text>
+
+  <rect x="670" y="295" width="200" height="84" class="box"/>
+  <text x="770" y="320" text-anchor="middle" class="title">backup.py</text>
+  <text x="770" y="340" text-anchor="middle" class="sub">backups.json (versioned,</text>
+  <text x="770" y="358" text-anchor="middle" class="sub">atomic writes) · reg save hives</text>
+
+  <!-- Safety note -->
+  <rect x="90" y="425" width="720" height="64" class="box"/>
+  <text x="450" y="450" text-anchor="middle" class="title">Safety invariants</text>
+  <text x="450" y="472" text-anchor="middle" class="sub">fix / restore require --yes (or --dry-run) · every fix records the prior value first · a fix that does not re-verify is reported failed</text>
+
+  <!-- Arrows -->
+  <line x1="240" y1="119" x2="360" y2="165" stroke="#5b6b7f" marker-end="url(#arrow)"/>
+  <line x1="660" y1="119" x2="540" y2="165" stroke="#5b6b7f" marker-end="url(#arrow)"/>
+  <line x1="230" y1="207" x2="270" y2="207" stroke="#5b6b7f" marker-end="url(#arrow)"/>
+  <text x="250" y="196" text-anchor="middle" class="lbl">loads</text>
+  <line x1="130" y1="249" x2="130" y2="295" stroke="#5b6b7f" marker-end="url(#arrow)"/>
+  <line x1="450" y1="249" x2="450" y2="295" stroke="#5b6b7f" marker-end="url(#arrow)"/>
+  <text x="462" y="278" class="lbl">reads / writes</text>
+  <line x1="540" y1="330" x2="670" y2="330" stroke="#5b6b7f" marker-end="url(#arrow)"/>
+  <text x="605" y="318" text-anchor="middle" class="lbl">records prior value</text>
+  <line x1="770" y1="249" x2="770" y2="295" stroke="#5b6b7f" marker-end="url(#arrow)"/>
+  <text x="770" y="278" text-anchor="middle" class="lbl">no registry access</text>
+</svg>

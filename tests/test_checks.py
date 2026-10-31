@@ -122,6 +122,13 @@ def test_manual_check_needs_no_target():
     assert check.kind == "manual"
 
 
+def test_manual_check_with_bogus_reg_type_rejected():
+    with pytest.raises(ValueError, match="unknown reg_type"):
+        check_from_dict(
+            _base_check(test_type="manual", reg_type="REG_NOPE"), source="test"
+        )
+
+
 def test_automated_check_without_target_rejected():
     with pytest.raises(ValueError, match="needs hive"):
         check_from_dict(_base_check(path=None), source="test")

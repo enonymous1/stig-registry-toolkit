@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stig-registry-toolkit"
-version = "2.1.0"
+dynamic = ["version"]
 description = "Check and enforce DISA STIG registry settings on Windows, from a CLI or a PyQt6 GUI."
 readme = "README.md"
 license = "MIT"
@@ -38,6 +38,9 @@ Repository = "https://github.com/enonymous1/stig-registry-toolkit"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "stig_registry_toolkit.__version__" }
 
 [tool.setuptools.package-data]
 stig_registry_toolkit = ["data/*.json"]

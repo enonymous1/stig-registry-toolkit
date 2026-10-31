@@ -100,3 +100,23 @@ def test_winreg_backend_unavailable_off_windows():
         pytest.skip("winreg exists on Windows")
     with pytest.raises(RegistryUnavailableError):
         WinRegBackend()
+
+
+def test_coerce_dword_qword_ranges():
+    assert coerce_value("REG_DWORD", 2**32 - 1) == 2**32 - 1
+    assert coerce_value("REG_QWORD", 2**64 - 1) == 2**64 - 1
+    with pytest.raises(ValueError):
+        coerce_value("REG_DWORD", -1)
+    with pytest.raises(ValueError):
+        coerce_value("REG_DWORD", 2**32)
+    with pytest.raises(ValueError):
+        coerce_value("REG_DWORD", "0x100000000")
+    with pytest.raises(ValueError):
+        coerce_value("REG_QWORD", 2**64)
+
+
+def test_backend_interface_is_abstract():
+    from stig_registry_toolkit.registry import RegistryBackend
+
+    with pytest.raises(TypeError):
+        RegistryBackend()

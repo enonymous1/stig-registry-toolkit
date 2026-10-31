@@ -45,6 +45,9 @@ _RESERVED_STEMS = frozenset(
     }
 )
 _INVALID_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+# Cap on a sanitized stem. It keeps a typical output path comfortably
+# under the Windows MAX_PATH limit; it is not a guarantee for very
+# long output directories, which fail loudly at write time instead.
 _MAX_STEM = 100
 _MAX_OPEN_WRITERS = 32
 
@@ -123,7 +126,10 @@ def _open_reader(
     missing column.
     """
     try:
-        handle = input_file.open(newline="", encoding="utf-8")
+        # utf-8-sig strips a BOM when one is present (common for
+        # exports saved from Windows tools) and behaves exactly like
+        # utf-8 when there is none.
+        handle = input_file.open(newline="", encoding="utf-8-sig")
     except OSError as exc:
         raise SplitError(f"cannot read {input_file}: {exc}") from exc
     reader = csv.DictReader(handle)
@@ -139,16 +145,38 @@ def _open_reader(
     return handle, reader, fieldnames
 
 
+def _row_group(
+    row: dict[str, str | None],
+    column: str,
+    input_file: Path,
+    line_num: int,
+    field_count: int,
+) -> str:
+    """The group value for one row, or "" when it is blank.
+
+    Both passes share this so a row can never count in planning and
+    then sort differently at write time. Rows with more fields than
+    the header fail loudly instead of silently dropping columns.
+    """
+    if None in row:
+        raise SplitError(
+            f"{input_file}:{line_num}: row has more fields "
+            f"than the header ({field_count} columns)"
+        )
+    value = row.get(column)
+    return value.strip() if value else ""
+
+
 def _count_rows(
     reader: csv.DictReader[str],
     input_file: Path,
     column: str,
-) -> tuple[list[str], dict[str, int], int, int]:
+) -> tuple[dict[str, int], int, int]:
     """Stream the planning pass, counting rows per group value.
 
-    Returns ``(fieldnames, counts, total_rows, skipped_rows)`` where
-    ``counts`` is in first-seen order and ``skipped_rows`` counts rows
-    whose group value is blank. Raises :class:`SplitError` on a row
+    Returns ``(counts, total_rows, skipped_rows)`` where ``counts``
+    is in first-seen order and ``skipped_rows`` counts rows whose
+    group value is blank. Raises :class:`SplitError` on a row
     with extra fields or malformed CSV content.
     """
     fieldnames = list(reader.fieldnames or [])
@@ -158,13 +186,9 @@ def _count_rows(
     try:
         for row in reader:
             total += 1
-            if None in row:
-                raise SplitError(
-                    f"{input_file}:{reader.line_num}: row has more fields "
-                    f"than the header ({len(fieldnames)} columns)"
-                )
-            value = row.get(column)
-            group = value.strip() if value else ""
+            group = _row_group(
+                row, column, input_file, reader.line_num, len(fieldnames)
+            )
             if not group:
                 skipped += 1
                 continue
@@ -173,7 +197,7 @@ def _count_rows(
         raise SplitError(f"{input_file}: malformed CSV: {exc}") from exc
     except UnicodeDecodeError as exc:
         raise SplitError(f"{input_file}: not valid UTF-8: {exc}") from exc
-    return fieldnames, counts, total, skipped
+    return counts, total, skipped
 
 
 class _WriterCache:
@@ -236,9 +260,7 @@ def split_stig_csv(
 
     handle, reader, fieldnames = _open_reader(input_file, column)
     try:
-        _fieldnames, counts, total_rows, skipped = _count_rows(
-            reader, input_file, column
-        )
+        counts, total_rows, skipped = _count_rows(reader, input_file, column)
     finally:
         handle.close()
     if not counts:
@@ -276,13 +298,9 @@ def split_stig_csv(
     try:
         try:
             for row in reader:
-                if None in row:
-                    raise SplitError(
-                        f"{input_file}:{reader.line_num}: row has more fields "
-                        f"than the header ({len(fieldnames)} columns)"
-                    )
-                value = row.get(column)
-                group = value.strip() if value else ""
+                group = _row_group(
+                    row, column, input_file, reader.line_num, len(fieldnames)
+                )
                 if not group:
                     continue
                 filename = filenames.get(group)
@@ -300,6 +318,12 @@ def split_stig_csv(
             raise SplitError(f"{input_file}: malformed CSV: {exc}") from exc
         except UnicodeDecodeError as exc:
             raise SplitError(f"{input_file}: not valid UTF-8: {exc}") from exc
+        except OSError as exc:
+            # Disk-full and permission failures mid-write must fail
+            # as a clean split error, not a traceback.
+            raise SplitError(
+                f"{input_file}: cannot write to {output_dir}: {exc}"
+            ) from exc
     finally:
         cache.close()
         handle.close()

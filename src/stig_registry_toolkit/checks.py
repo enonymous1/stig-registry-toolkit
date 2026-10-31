@@ -128,14 +128,9 @@ class Check:
             raise ValueError(f"check {self.id}: unknown severity {self.severity!r}")
         if self.test_type not in ("automated", "manual"):
             raise ValueError(f"check {self.id}: unknown test_type {self.test_type!r}")
-        if self.test_type == "manual":
-            return
-        if not self.hive or not self.path or not self.value_name or not self.reg_type:
-            raise ValueError(
-                f"check {self.id}: automated check needs hive, path, "
-                "value_name and reg_type"
-            )
-        if self.reg_type not in REG_TYPE_NAMES:
+        # A stray reg_type or pattern on a manual check is validated
+        # too: manual means "no registry target", not "anything goes".
+        if self.reg_type is not None and self.reg_type not in REG_TYPE_NAMES:
             raise ValueError(f"check {self.id}: unknown reg_type {self.reg_type!r}")
         if self.pattern is not None:
             if self.expected is not None:
@@ -148,11 +143,18 @@ class Check:
                 raise ValueError(
                     f"check {self.id}: invalid pattern {self.pattern!r}: {exc}"
                 ) from exc
-        elif self.expected is None:
+        if self.test_type == "manual":
+            return
+        if not self.hive or not self.path or not self.value_name or not self.reg_type:
+            raise ValueError(
+                f"check {self.id}: automated check needs hive, path, "
+                "value_name and reg_type"
+            )
+        if self.pattern is None and self.expected is None:
             raise ValueError(
                 f"check {self.id}: automated check needs expected or pattern"
             )
-        else:
+        if self.pattern is None:
             # Validates the shape of the expected value(s) for the type.
             values = (
                 self.expected if isinstance(self.expected, list) else [self.expected]
